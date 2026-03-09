@@ -3,6 +3,7 @@
 import json
 import google.generativeai as genai
 from config import get_settings
+from knowledge.hospital_info import get_full_context
 
 settings = get_settings()
 
@@ -11,7 +12,10 @@ class AIEngine:
     def __init__(self):
         if settings.gemini_api_key:
             genai.configure(api_key=settings.gemini_api_key)
-            self.model = genai.GenerativeModel("gemini-2.0-flash")
+            self.model = genai.GenerativeModel(
+                "gemini-2.0-flash",
+                system_instruction=get_full_context()
+            )
         else:
             self.model = None
 
