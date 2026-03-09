@@ -11,7 +11,7 @@ class AIEngine:
     def __init__(self):
         if settings.gemini_api_key:
             genai.configure(api_key=settings.gemini_api_key)
-            self.model = genai.GenerativeModel("gemini-1.5-flash")
+            self.model = genai.GenerativeModel("gemini-2.0-flash")
         else:
             self.model = None
 
@@ -28,14 +28,15 @@ Return JSON with these fields:
 
 JSON:"""
         if self.model:
-            response = self.model.generate_content(prompt)
             try:
+                response = self.model.generate_content(prompt)
                 text = response.text.strip()
                 if text.startswith("```"):
                     text = text.split("\n", 1)[1].rsplit("```", 1)[0]
                 return json.loads(text)
-            except (json.JSONDecodeError, IndexError):
-                return {"name": None, "contact": None, "service_interest": "General Inquiry", "urgency": "medium"}
+            except Exception as e:
+                print(f"Fallback due to API error: {e}")
+                return self._fallback_extract(raw_message)
         else:
             # Fallback: basic keyword extraction
             return self._fallback_extract(raw_message)
@@ -52,13 +53,14 @@ Return JSON with:
 
 JSON:"""
         if self.model:
-            response = self.model.generate_content(prompt)
             try:
+                response = self.model.generate_content(prompt)
                 text = response.text.strip()
                 if text.startswith("```"):
                     text = text.split("\n", 1)[1].rsplit("```", 1)[0]
                 return json.loads(text)
-            except (json.JSONDecodeError, IndexError):
+            except Exception as e:
+                print(f"Fallback due to API error: {e}")
                 return {"service_category": "General", "urgency_score": 5, "intent": "general_inquiry"}
         else:
             return {"service_category": "General", "urgency_score": 5, "intent": "general_inquiry"}
@@ -80,16 +82,21 @@ Rules:
 - If they mentioned urgency, acknowledge it
 
 Greeting:"""
+        fallback_response = (
+            f"Hi {lead_name or 'there'}! 👋 Thank you for reaching out about {service_interest}. "
+            f"I'm here to help you get the care you need. "
+            f"Let me ask a few quick questions so I can find the best option for you."
+        )
+
         if self.model:
-            response = self.model.generate_content(prompt)
-            return response.text.strip()
+            try:
+                response = self.model.generate_content(prompt)
+                return response.text.strip()
+            except Exception as e:
+                print(f"Fallback due to API error: {e}")
+                return fallback_response
         else:
-            name = lead_name or "there"
-            return (
-                f"Hi {name}! 👋 Thank you for reaching out about {service_interest}. "
-                f"I'm here to help you get the care you need. "
-                f"Let me ask a few quick questions so I can find the best option for you."
-            )
+            return fallback_response
 
     async def generate_qualification_response(
         self, lead_context: dict, user_answer: str, question_number: int
@@ -119,29 +126,28 @@ Generate the most relevant next question. Return ONLY valid JSON:
 }}
 
 JSON:"""
+        questions = [
+            {"question": "What specific treatment or service are you looking for?", "category": "service", "is_final": False},
+            {"question": "How soon do you need this? Is it urgent?", "category": "urgency", "is_final": False},
+            {"question": "Will you be using insurance or paying out of pocket?", "category": "insurance", "is_final": False},
+            {"question": "Have you visited our hospital before?", "category": "experience", "is_final": False},
+            {"question": "Would you like me to check available appointment slots for you?", "category": "conversion", "is_final": True},
+        ]
+        idx = min(question_number, len(questions) - 1)
+        fallback_response = questions[idx]
+
         if self.model:
-            response = self.model.generate_content(prompt)
             try:
+                response = self.model.generate_content(prompt)
                 text = response.text.strip()
                 if text.startswith("```"):
                     text = text.split("\n", 1)[1].rsplit("```", 1)[0]
                 return json.loads(text)
-            except (json.JSONDecodeError, IndexError):
-                return {
-                    "question": "Could you tell me more about your timeline for this?",
-                    "category": "urgency",
-                    "is_final": question_number >= 4,
-                }
+            except Exception as e:
+                print(f"Fallback due to API error: {e}")
+                return fallback_response
         else:
-            questions = [
-                {"question": "What specific treatment or service are you looking for?", "category": "service", "is_final": False},
-                {"question": "How soon do you need this? Is it urgent?", "category": "urgency", "is_final": False},
-                {"question": "Will you be using insurance or paying out of pocket?", "category": "insurance", "is_final": False},
-                {"question": "Have you visited our hospital before?", "category": "experience", "is_final": False},
-                {"question": "Would you like me to check available appointment slots for you?", "category": "conversion", "is_final": True},
-            ]
-            idx = min(question_number, len(questions) - 1)
-            return questions[idx]
+            return fallback_response
 
     def _fallback_extract(self, message: str) -> dict:
         """Basic keyword-based extraction when AI is unavailable."""
