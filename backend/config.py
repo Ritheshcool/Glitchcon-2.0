@@ -6,7 +6,7 @@ from functools import lru_cache
 
 class Settings(BaseSettings):
     # AI
-    gemini_api_key: str = ""
+    groq_api_key: str = ""
 
     # WhatsApp
     meta_app_secret: str = ""

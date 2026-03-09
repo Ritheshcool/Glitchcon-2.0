@@ -1,23 +1,37 @@
-"""AI Conversation Engine — powered by Google Gemini."""
+"""AI Conversation Engine — powered by Groq (LLaMA 3)."""
 
 import json
-import google.generativeai as genai
+from groq import Groq
 from config import get_settings
 from knowledge.hospital_info import get_full_context
 
 settings = get_settings()
 
-
 class AIEngine:
     def __init__(self):
-        if settings.gemini_api_key:
-            genai.configure(api_key=settings.gemini_api_key)
-            self.model = genai.GenerativeModel(
-                "gemini-2.0-flash",
-                system_instruction=get_full_context()
-            )
+        if settings.groq_api_key:
+            self.client = Groq(api_key=settings.groq_api_key)
+            self.model = "llama3-8b-8192"
+            self.system_prompt = get_full_context()
         else:
+            self.client = None
             self.model = None
+
+    def _generate(self, prompt: str) -> str:
+        if not self.client:
+            raise Exception("Groq client not initialized")
+            
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": prompt}
+        ]
+        
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=0.2
+        )
+        return response.choices[0].message.content
 
     async def extract_lead_info(self, raw_message: str) -> dict:
         """Extract structured lead information from a raw message."""
@@ -31,10 +45,10 @@ Return JSON with these fields:
 - urgency: "high", "medium", or "low" based on how urgent their need seems
 
 JSON:"""
-        if self.model:
+        if self.client:
             try:
-                response = self.model.generate_content(prompt)
-                text = response.text.strip()
+                response_text = self._generate(prompt)
+                text = response_text.strip()
                 if text.startswith("```"):
                     text = text.split("\n", 1)[1].rsplit("```", 1)[0]
                 return json.loads(text)
@@ -56,10 +70,10 @@ Return JSON with:
 - intent: one of [book_appointment, get_info, compare_options, emergency, general_inquiry]
 
 JSON:"""
-        if self.model:
+        if self.client:
             try:
-                response = self.model.generate_content(prompt)
-                text = response.text.strip()
+                response_text = self._generate(prompt)
+                text = response_text.strip()
                 if text.startswith("```"):
                     text = text.split("\n", 1)[1].rsplit("```", 1)[0]
                 return json.loads(text)
@@ -92,10 +106,9 @@ Greeting:"""
             f"Let me ask a few quick questions so I can find the best option for you."
         )
 
-        if self.model:
+        if self.client:
             try:
-                response = self.model.generate_content(prompt)
-                return response.text.strip()
+                return self._generate(prompt).strip()
             except Exception as e:
                 print(f"Fallback due to API error: {e}")
                 return fallback_response
@@ -140,10 +153,10 @@ JSON:"""
         idx = min(question_number, len(questions) - 1)
         fallback_response = questions[idx]
 
-        if self.model:
+        if self.client:
             try:
-                response = self.model.generate_content(prompt)
-                text = response.text.strip()
+                response_text = self._generate(prompt)
+                text = response_text.strip()
                 if text.startswith("```"):
                     text = text.split("\n", 1)[1].rsplit("```", 1)[0]
                 return json.loads(text)
@@ -152,6 +165,18 @@ JSON:"""
                 return fallback_response
         else:
             return fallback_response
+
+    def answer_followup_question(self, question: str) -> str:
+        """Answer a question strictly using the knowledge base."""
+        prompt = f"A patient who is already in our system asked a follow-up question. Question: '{question}'. Answer them concisely and politely, using ONLY the facts in your knowledge base."
+        if self.client:
+            try:
+                return self._generate(prompt).strip()
+            except Exception as e:
+                print(f"FAILED AI GENERATION IN answer_followup_question: {e}")
+                raise e
+        else:
+            raise Exception("No AI client configured")
 
     def _fallback_extract(self, message: str) -> dict:
         """Basic keyword-based extraction when AI is unavailable."""

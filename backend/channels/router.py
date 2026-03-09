@@ -109,14 +109,28 @@ class MessageRouter:
             return await self._continue_post_qualification(lead, message_text)
 
         else:
-            # Nurturing or converted — generic response
+            # Nurturing or converted — allow AI to answer follow-up QA using Knowledge Base
+            conv = Conversation(
+                lead_id=lead.id, sender="user", message=message_text, channel=channel
+            )
+            self.db.add(conv)
+            self.db.commit()
+
+            try:
+                ai_response = self.ai.answer_followup_question(message_text)
+            except Exception:
+                ai_response = "Thank you for your message! A member of our team will be in touch shortly."
+
+            conv_agent = Conversation(
+                lead_id=lead.id, sender="agent", message=ai_response, channel=channel
+            )
+            self.db.add(conv_agent)
+            self.db.commit()
+
             return {
                 "lead_id": lead.id,
                 "status": lead.status.value,
-                "agent_response": (
-                    "Thank you for your message! A member of our team will be in touch shortly. "
-                    "Is there anything else I can help you with?"
-                ),
+                "agent_response": ai_response,
             }
 
     async def _handle_scored_lead(self, lead: Lead, score_result: dict) -> dict:
