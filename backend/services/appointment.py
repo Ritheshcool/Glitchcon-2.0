@@ -1,49 +1,43 @@
 """Appointment booking service — check availability and book slots."""
 
-import json
-from pathlib import Path
 from sqlalchemy.orm import Session
 from models.lead import Lead, LeadStatus
 from models.appointment import Appointment
 from models.conversation import InteractionLog
+from models.hospital import Specialty, Doctor, AppointmentSlot
 
 
 class AppointmentService:
     def __init__(self, db: Session):
         self.db = db
-        doctors_path = Path(__file__).parent.parent / "mock_data" / "doctors.json"
-        with open(doctors_path) as f:
-            self.doctors_data = json.load(f)
 
     def check_doctor_availability(self, specialty: str, date_range: list[str] = None) -> list[dict]:
         """
-        check_doctor_availability(specialty, date_range) → available slots
+        check_doctor_availability(specialty, date_range) → available slots from database
         """
+        query = (
+            self.db.query(AppointmentSlot)
+            .join(Doctor)
+            .join(Specialty)
+            .filter(Specialty.name.ilike(f"%{specialty}%"))
+            .filter(AppointmentSlot.is_available == True)
+        )
+        
+        if date_range:
+            query = query.filter(AppointmentSlot.date.in_(date_range))
+            
+        slots = query.all()
+        
         results = []
-        for spec in self.doctors_data["specialties"]:
-            if specialty.lower() in spec["name"].lower():
-                for doctor in spec["doctors"]:
-                    for slot in doctor["slots"]:
-                        if slot["available"]:
-                            if date_range:
-                                if slot["date"] in date_range:
-                                    results.append({
-                                        "slot_id": slot["id"],
-                                        "doctor_name": doctor["name"],
-                                        "specialty": spec["name"],
-                                        "date": slot["date"],
-                                        "time": slot["time"],
-                                        "preparation": spec.get("preparation", ""),
-                                    })
-                            else:
-                                results.append({
-                                    "slot_id": slot["id"],
-                                    "doctor_name": doctor["name"],
-                                    "specialty": spec["name"],
-                                    "date": slot["date"],
-                                    "time": slot["time"],
-                                    "preparation": spec.get("preparation", ""),
-                                })
+        for slot in slots:
+            results.append({
+                "slot_id": slot.id,
+                "doctor_name": slot.doctor.name,
+                "specialty": slot.doctor.specialty.name,
+                "date": slot.date,
+                "time": slot.time,
+                "preparation": slot.doctor.specialty.preparation_instructions or "",
+            })
         return results
 
     def book_appointment(self, lead_id: int, slot_id: str) -> dict:
@@ -54,36 +48,25 @@ class AppointmentService:
         if not lead:
             return {"error": "Lead not found"}
 
-        # Find the slot
-        slot_info = None
-        for spec in self.doctors_data["specialties"]:
-            for doctor in spec["doctors"]:
-                for slot in doctor["slots"]:
-                    if slot["id"] == slot_id:
-                        slot_info = {
-                            "doctor_name": doctor["name"],
-                            "specialty": spec["name"],
-                            "date": slot["date"],
-                            "time": slot["time"],
-                            "preparation": spec.get("preparation", ""),
-                        }
-                        # Mark as unavailable
-                        slot["available"] = False
-                        break
-
-        if not slot_info:
+        # Find the slot in database and lock it
+        slot = self.db.query(AppointmentSlot).filter(AppointmentSlot.id == slot_id, AppointmentSlot.is_available == True).first()
+        
+        if not slot:
             return {"error": "Slot not found or already booked"}
 
+        # Mark as unavailable
+        slot.is_available = False
+        
         # Create appointment
         appointment = Appointment(
             lead_id=lead_id,
-            doctor_name=slot_info["doctor_name"],
-            specialty=slot_info["specialty"],
-            slot_date=slot_info["date"],
-            slot_time=slot_info["time"],
-            slot_id=slot_id,
+            doctor_name=slot.doctor.name,
+            specialty=slot.doctor.specialty.name,
+            slot_date=slot.date,
+            slot_time=slot.time,
+            slot_id=slot.id,
             status="confirmed",
-            preparation_instructions=slot_info["preparation"],
+            preparation_instructions=slot.doctor.specialty.preparation_instructions or "",
         )
         self.db.add(appointment)
 
@@ -97,7 +80,7 @@ class AppointmentService:
             lead_id=lead_id,
             stage="booking",
             outcome="confirmed",
-            details=f"Booked with {slot_info['doctor_name']} on {slot_info['date']} at {slot_info['time']}",
+            details=f"Booked with {slot.doctor.name} on {slot.date} at {slot.time}",
         )
         self.db.add(log)
         self.db.commit()
@@ -105,18 +88,18 @@ class AppointmentService:
         confirmation = {
             "appointment_id": appointment.id,
             "status": "confirmed",
-            "doctor": slot_info["doctor_name"],
-            "specialty": slot_info["specialty"],
-            "date": slot_info["date"],
-            "time": slot_info["time"],
-            "preparation_instructions": slot_info["preparation"],
+            "doctor": slot.doctor.name,
+            "specialty": slot.doctor.specialty.name,
+            "date": slot.date,
+            "time": slot.time,
+            "preparation_instructions": slot.doctor.specialty.preparation_instructions or "",
             "confirmation_message": (
                 f"✅ Your appointment is confirmed!\n\n"
-                f"👨‍⚕️ Doctor: {slot_info['doctor_name']}\n"
-                f"🏥 Department: {slot_info['specialty']}\n"
-                f"📅 Date: {slot_info['date']}\n"
-                f"⏰ Time: {slot_info['time']}\n\n"
-                f"📋 Preparation:\n{slot_info['preparation']}\n\n"
+                f"👨‍⚕️ Doctor: {slot.doctor.name}\n"
+                f"🏥 Department: {slot.doctor.specialty.name}\n"
+                f"📅 Date: {slot.date}\n"
+                f"⏰ Time: {slot.time}\n\n"
+                f"📋 Preparation:\n{slot.doctor.specialty.preparation_instructions or 'None'}\n\n"
                 f"We look forward to seeing you!"
             ),
         }
